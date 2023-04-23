@@ -120,6 +120,10 @@ void gesture(unsigned char type){
         setLampState();
     } else if (type == SW_FLICK_WEST_EAST) {
         mode = (mode + 1) % 3;
+    } else if (type == SW_FLICK_EAST_WEST) {
+        mode = (mode - 1) % 3;
+    } else {
+        mode = 0;
     }
 }
 
