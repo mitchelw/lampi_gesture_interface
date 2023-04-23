@@ -1,6 +1,10 @@
 #include <Arduino.h>
 #include <skywriter.h>
 #include "color_conversion.hpp"
+#include <ArduinoMqttClient.h>
+#include <WiFiNINA.h>
+#include "wifi_config.hpp"
+#include <ArduinoJson.h>
 
 #define PIN_TRFR  21    // TRFR Pin of Skywriter
 #define PIN_RESET 20    // Reset Pin of Skywriter
@@ -9,7 +13,10 @@ void gesture(unsigned char type);
 void touch(unsigned char type);
 void xyz(unsigned int x, unsigned int y, unsigned int z);
 void brightnessWheel(int deg);
+void onMqttMessage(int messageSize);
 void setLampHsv(float h, float s, float v);
+void setLampState();
+void publishState();
 
 // Config
 long touch_timeout = 0;
@@ -32,6 +39,19 @@ float saturation = 1;
 float brightness = 1;
 int mode = 0;
 
+// WIFI, MQTT
+WiFiClient wifiClient;
+MqttClient mqttClient(wifiClient);
+const char broker[] = "ec2-107-22-75-242.compute-1.amazonaws.com";
+int        port     = 50001;
+const char pub_topic[]  = "devices/08b61f821470/lamp/changed";
+const char sub_topic[]  = "devices/08b61f821470/lamp/set_config";
+const char willTopic[] = "lamp/connection/08b61f821470/";
+String willPayload = "0";
+bool willRetain = true;
+int willQos = 2;
+int subscribeQos = 1;
+
 void setup() {
     Skywriter.begin(PIN_TRFR, PIN_RESET);
     Skywriter.onGesture(gesture);
@@ -48,11 +68,43 @@ void setup() {
 //    while(!Serial);
 
     setLampHsv(hue, saturation, brightness);
+
+    Serial.print("Attempting to connect to WPA SSID: ");
+    Serial.println(ssid);
+    while (WiFi.begin(ssid, pass) != WL_CONNECTED) {
+        // failed, retry
+        Serial.print(".");
+        delay(5000);
+    }
+    Serial.println("You're connected to the network!");
+
+
+    mqttClient.beginWill(willTopic, willPayload.length(), willRetain, willQos);
+    mqttClient.print(willPayload);
+    mqttClient.endWill();
+
+    Serial.print("Attempting to connect to the MQTT broker: ");
+    Serial.println(broker);
+
+    if (!mqttClient.connect(broker, port)) {
+        Serial.print("MQTT connection failed! Error code = ");
+        Serial.println(mqttClient.connectError());
+
+        while (1);
+    }
+    Serial.println("You're connected to the MQTT broker!");
+
+    mqttClient.onMessage(onMqttMessage);
+
+    mqttClient.subscribe(sub_topic, subscribeQos);
+
+    publishState();
 }
 
 void loop() {
     Skywriter.poll();
     if( touch_timeout > 0 ) touch_timeout--;
+    mqttClient.poll();
 }
 
 void gesture(unsigned char type){
@@ -62,10 +114,10 @@ void gesture(unsigned char type){
 
     if (type == SW_FLICK_SOUTH_NORTH) {
         is_on = true;
-        setLampHsv(hue, saturation, brightness);
+        setLampState();
     } else if (type == SW_FLICK_NORTH_SOUTH) {
         is_on = false;
-        setLampHsv(0, 0, 0);
+        setLampState();
     } else if (type == SW_FLICK_WEST_EAST) {
         mode = (mode + 1) % 3;
     }
@@ -99,7 +151,41 @@ void brightnessWheel(int deg) {
 //        sprintf(buf, "Deg: %d, Delta: %d, Brightness: %d", deg, delta, brightness);
 //        Serial.println(buf);
     }
-    setLampHsv(hue, saturation, brightness);
+    setLampState();
+}
+
+void onMqttMessage(int messageSize) {
+    // we received a message, print out the topic and contents
+    Serial.print("Received a message with topic '");
+    Serial.print(mqttClient.messageTopic());
+    Serial.print("', duplicate = ");
+    Serial.print(mqttClient.messageDup() ? "true" : "false");
+    Serial.print(", QoS = ");
+    Serial.print(mqttClient.messageQoS());
+    Serial.print(", retained = ");
+    Serial.print(mqttClient.messageRetain() ? "true" : "false");
+    Serial.print("', length ");
+    Serial.print(messageSize);
+    Serial.println(" bytes:");
+
+    char json[1024];
+    int i = 0;
+    while (mqttClient.available()) {
+        char c = (char)mqttClient.read();
+        Serial.print(c);
+        json[i++] = c;
+    }
+    json[i] = 0;
+
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, String(json));
+
+    brightness = doc[String("brightness")];
+    hue = doc[String("color")][String("h")];
+    saturation = doc[String("color")][String("s")];
+    is_on = doc[String("on")];
+
+    setLampState();
 }
 
 void setLampHsv(float h, float s, float v) {
@@ -108,4 +194,24 @@ void setLampHsv(float h, float s, float v) {
     analogWrite(red_led, (int)(rgb[0] * 255));
     analogWrite(green_led, (int)(rgb[1] * 255));
     analogWrite(blue_led, (int)(rgb[2] * 255));
+}
+
+void setLampState() {
+    if (is_on) {
+        setLampHsv(hue, saturation, brightness);
+    } else {
+        setLampHsv(0, 0, 0);
+    }
+    publishState();
+}
+
+
+void publishState() {
+    char json_out[1024];
+    sprintf(json_out, R"({"color": {"h": %f, "s": %f}, "brightness": %f, "on": %s, "client": "08b61f821470"})",
+            hue, saturation, brightness, is_on ? "true" : "false");
+
+    mqttClient.beginMessage(pub_topic);
+    mqttClient.print(json_out);
+    mqttClient.endMessage();
 }
