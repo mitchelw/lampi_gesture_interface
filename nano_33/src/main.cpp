@@ -14,6 +14,9 @@ const int green_led = 6;
 const int blue_led = 4;
 const int reset_pin = 20;  // TRFR Pin of Skywriter
 const int trfr_pin = 21;   // Reset Pin of Skywriter
+const int hue_led = 9;
+const int saturation_led = 8;
+const int brightness_led = 7;
 
 // State
 bool is_on = true;
@@ -52,6 +55,14 @@ void setup() {
     pinMode(red_led, OUTPUT);
     pinMode(green_led, OUTPUT);
     pinMode(blue_led, OUTPUT);
+    pinMode(hue_led, OUTPUT);
+    pinMode(saturation_led, OUTPUT);
+    pinMode(brightness_led, OUTPUT);
+
+    digitalWrite(hue_led, LOW);
+    digitalWrite(saturation_led, LOW);
+    digitalWrite(brightness_led, LOW);
+
 
     Serial.begin(9600);
 //    while(!Serial);
@@ -89,6 +100,9 @@ void setup() {
 
     // Send the initial state to the broker
     publishState();
+
+    // Set hue pin as confirmation
+    digitalWrite(hue_led, HIGH);
 }
 
 
@@ -113,6 +127,18 @@ void gesture(unsigned char type) {
         mode = (mode + 1) % 3;
     } else if (type == SW_FLICK_EAST_WEST) {    // Swipe Left
         mode = (mode - 1) % 3;
+    }
+
+    if (type == SW_FLICK_WEST_EAST || type == SW_FLICK_EAST_WEST) {
+        digitalWrite(hue_led, LOW);
+        digitalWrite(saturation_led, LOW);
+        digitalWrite(brightness_led, LOW);
+        if (mode == 0)
+            digitalWrite(hue_led, HIGH);
+        else if (mode == 1)
+            digitalWrite(saturation_led, HIGH);
+        else
+            digitalWrite(brightness_led, HIGH);
     }
 }
 
